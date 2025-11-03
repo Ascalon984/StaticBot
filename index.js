@@ -44,6 +44,11 @@ function saveConfig(cfg) {
 }
 
 let config = loadConfig();
+// set default cooldown to 60s (1 minute) unless user explicitly configured otherwise
+if (typeof config.replyCooldownSeconds !== 'number' || config.replyCooldownSeconds !== 60) {
+  config.replyCooldownSeconds = 60;
+  saveConfig(config);
+}
 
 function jidToNumber(jid) {
   if (!jid) return null;
@@ -66,6 +71,28 @@ async function startBot() {
     }
     console.log('Using auth directory:', authDir);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+    // load persisted "replied" set to ensure we reply at-most-once per incoming message
+    const REPLIED_PATH = path.join(__dirname, 'replied.json');
+    let repliedSet = new Set();
+    try {
+      if (fs.existsSync(REPLIED_PATH)) {
+        const raw = fs.readFileSync(REPLIED_PATH, 'utf8');
+        const arr = JSON.parse(raw || '[]');
+        if (Array.isArray(arr)) repliedSet = new Set(arr);
+      }
+    } catch (e) {
+      console.error('Failed to load replied.json', e);
+      repliedSet = new Set();
+    }
+
+    function saveReplied() {
+      try {
+        fs.writeFileSync(REPLIED_PATH, JSON.stringify(Array.from(repliedSet), null, 2));
+      } catch (e) {
+        console.error('Failed to save replied.json', e);
+      }
+    }
 
     const sock = makeWASocket({
       logger: pino({ level: 'silent' }),
@@ -181,6 +208,13 @@ async function startBot() {
         const text = (getText() || '').trim();
         const remoteNumber = jidToNumber(from);
         console.log('Incoming message from', remoteNumber, '-', text);
+
+        // Create a unique key per incoming message to ensure we reply at-most-once per message
+        const messageKey = `${remoteNumber}_${msg.key.id}`;
+        if (repliedSet.has(messageKey)) {
+          console.log('Already replied to message', messageKey, '- skipping');
+          return;
+        }
 
         // Admin commands: only from configured adminNumbers
         const isAdmin = config.adminNumbers.includes(remoteNumber);
@@ -391,6 +425,13 @@ async function startBot() {
 
         // Send reply
         await sock.sendMessage(from, { text: reply });
+        // mark this message as replied (persist so we don't reply again to same message)
+        try {
+          repliedSet.add(messageKey);
+          saveReplied();
+        } catch (e) {
+          // ignore save errors
+        }
         console.log('Replied to', remoteNumber, 'mode:', config.mode);
 
       } catch (err) {
