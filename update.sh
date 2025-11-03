@@ -7,7 +7,9 @@
 
 set -euo pipefail
 
-REPO_DIR="$HOME/StaticBot"
+# autodetect repository directory (directory where this script lives)
+DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$DIR"
 cd "$REPO_DIR" || { echo "Repo dir not found: $REPO_DIR"; exit 1; }
 
 echo "[update.sh] Backing up auth_info..."
