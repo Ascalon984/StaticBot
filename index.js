@@ -143,7 +143,6 @@ async function startBot() {
 
     const sock = makeWASocket({
       logger: pino({ level: 'silent' }),
-      printQRInTerminal: true,
       auth: state,
       version
     });
@@ -177,6 +176,8 @@ async function startBot() {
       if (connection === 'close') {
         const reason = lastDisconnect?.error?.output?.statusCode;
         log('info', 'Connection closed, status code:', reason);
+        // Reset botRunning flag so reconnect can proceed
+        botRunning = false;
         // if logged out, stop; otherwise reconnect after delay
         if (reason !== DisconnectReason.loggedOut) {
           log('info', 'Reconnecting in 5 seconds...');
