@@ -337,7 +337,7 @@ async function startBot() {
               assistState.bySender[remoteNumber].assistEnabled = true;
               assistState.bySender[remoteNumber].lastDeniedAt = 0;
               saveAssistState();
-              await sock.sendMessage(from, { text: 'Terima kasih — saya akan terus membalas saat admin belum melihat chat.' });
+              await sock.sendMessage(from, { text: 'Terima kasih atas konfirmasinya! ✅\n\nSaya akan terus siap membantu Anda ketika admin sedang tidak melihat chat.\n\nJangan ragu untuk menghubungi kami kapan saja. 😊' });
               return;
             }
             if (normalized === 'assist_no' || normalized === 'tidak' || normalized === 'no') {
@@ -346,7 +346,7 @@ async function startBot() {
               assistState.bySender[remoteNumber].lastDeniedAt = Date.now();
               saveAssistState();
               const cooldownMin = Math.round(((config.assistCooldownSeconds || 3600) / 60));
-              await sock.sendMessage(from, { text: `Baik. Saya tidak akan membalas selama ${cooldownMin} menit.` });
+              await sock.sendMessage(from, { text: `Baik, dipahami! 👌\n\nSaya tidak akan mengirim balasan otomatis selama *${cooldownMin} menit* ke depan.\n\nJika Anda ingin berbicara langsung dengan admin, silakan tunggu balasan dari admin ya.\n\nTerima kasih! 🙏` });
               return;
             }
           }
@@ -366,9 +366,9 @@ async function startBot() {
             if (['online', 'offline', 'busy'].includes(val)) {
               config.mode = val;
               saveConfig(config);
-              await sock.sendMessage(from, { text: `✅ Mode berhasil diubah menjadi: ${val}` });
+              await sock.sendMessage(from, { text: `✅ *Status Berhasil Diperbarui*\n\nMode bot telah diubah menjadi: *${val.toUpperCase()}*\n\nPerubahan telah disimpan dan akan berlaku untuk pesan selanjutnya.` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !status online|offline|busy' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!status <mode>\n\nMode yang tersedia:\n• online\n• offline\n• busy\n\nContoh: !status online` });
             }
             return;
           }
@@ -379,13 +379,13 @@ async function startBot() {
             if (sub === 'add' && num) {
               if (!config.whitelist.includes(num)) config.whitelist.push(num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `➕ Nomor ${num} berhasil ditambahkan ke whitelist.` });
+              await sock.sendMessage(from, { text: `✅ *Whitelist Diperbarui*\n\nNomor *${num}* berhasil ditambahkan ke whitelist.\n\nBot sekarang akan membalas pesan dari nomor ini.` });
             } else if (sub === 'remove' && num) {
               config.whitelist = config.whitelist.filter(n => n !== num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `➖ Nomor ${num} dihapus dari whitelist.` });
+              await sock.sendMessage(from, { text: `✅ *Whitelist Diperbarui*\n\nNomor *${num}* telah dihapus dari whitelist.\n\nBot tidak akan membalas pesan dari nomor ini lagi.` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !whitelist add|remove <nomor>' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!whitelist add <nomor>\n!whitelist remove <nomor>\n\nContoh:\n!whitelist add 628123456789` });
             }
             return;
           }
@@ -396,19 +396,22 @@ async function startBot() {
             if (sub === 'add' && num) {
               if (!config.blacklist.includes(num)) config.blacklist.push(num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `⛔ Nomor ${num} berhasil ditambahkan ke blacklist.` });
+              await sock.sendMessage(from, { text: `⛔ *Blacklist Diperbarui*\n\nNomor *${num}* berhasil ditambahkan ke blacklist.\n\nBot tidak akan merespon pesan dari nomor ini.` });
             } else if (sub === 'remove' && num) {
               config.blacklist = config.blacklist.filter(n => n !== num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `✔️ Nomor ${num} telah dihapus dari blacklist.` });
+              await sock.sendMessage(from, { text: `✅ *Blacklist Diperbarui*\n\nNomor *${num}* telah dihapus dari blacklist.\n\nBot sekarang dapat merespon pesan dari nomor ini.` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !blacklist add|remove <nomor>' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!blacklist add <nomor>\n!blacklist remove <nomor>\n\nContoh:\n!blacklist add 628123456789` });
             }
             return;
           }
 
           if (cmd === 'show') {
-            await sock.sendMessage(from, { text: `📋 Config saat ini:\n• mode: ${config.mode}\n• ownerName: ${config.ownerName}\n• whitelist: ${config.whitelist.join(', ') || '-'}\n• blacklist: ${config.blacklist.join(', ') || '-'}\n• adminNumbers: ${config.adminNumbers.join(', ') || '-'}\n• suppressWhenOwnerActive: ${config.suppressWhenOwnerActive}\n• suppressTimeoutSeconds: ${config.suppressTimeoutSeconds}` });
+            const wl = config.whitelist.length > 0 ? config.whitelist.join(', ') : 'Tidak ada';
+            const bl = config.blacklist.length > 0 ? config.blacklist.join(', ') : 'Tidak ada';
+            const adm = config.adminNumbers.length > 0 ? config.adminNumbers.join(', ') : 'Tidak ada';
+            await sock.sendMessage(from, { text: `📋 *Konfigurasi Bot Saat Ini*\n\n*Status & Mode:*\n• Mode: ${config.mode.toUpperCase()}\n• Owner: ${config.ownerName}\n• Auto-Reply: ${config.autoReply ? 'Aktif ✅' : 'Nonaktif ❌'}\n\n*Cooldown & Suppress:*\n• Reply Cooldown: ${config.replyCooldownSeconds || 60} detik\n• Suppress When Active: ${config.suppressWhenOwnerActive ? 'Aktif ✅' : 'Nonaktif ❌'}\n• Suppress Timeout: ${config.suppressTimeoutSeconds || 120} detik\n\n*Whitelist:*\n${wl}\n\n*Blacklist:*\n${bl}\n\n*Admin Numbers:*\n${adm}` });
             return;
           }
 
@@ -418,13 +421,13 @@ async function startBot() {
             if (sub === 'add' && num) {
               if (!config.adminNumbers.includes(num)) config.adminNumbers.push(num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `🔐 Nomor ${num} berhasil ditambahkan sebagai admin.` });
+              await sock.sendMessage(from, { text: `🔐 *Admin Ditambahkan*\n\nNomor *${num}* berhasil ditambahkan sebagai admin.\n\nNomor ini sekarang dapat menggunakan perintah admin.` });
             } else if (sub === 'remove' && num) {
               config.adminNumbers = config.adminNumbers.filter(n => n !== num);
               saveConfig(config);
-              await sock.sendMessage(from, { text: `🔓 Nomor ${num} telah dihapus dari admin.` });
+              await sock.sendMessage(from, { text: `🔓 *Admin Dihapus*\n\nNomor *${num}* telah dihapus dari daftar admin.\n\nNomor ini tidak dapat lagi menggunakan perintah admin.` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !admin add|remove <nomor>' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!admin add <nomor>\n!admin remove <nomor>\n\nContoh:\n!admin add 628123456789` });
             }
             return;
           }
@@ -432,13 +435,13 @@ async function startBot() {
           if (cmd === 'suppress') {
             const sub = args[0];
             if (!sub) {
-              await sock.sendMessage(from, { text: 'Gunakan: !suppress on|off OR !suppress timeout <seconds>' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!suppress on|off\n!suppress timeout <detik>\n\nContoh:\n!suppress on\n!suppress timeout 120` });
               return;
             }
             if (sub === 'on' || sub === 'off') {
               config.suppressWhenOwnerActive = (sub === 'on');
               saveConfig(config);
-              await sock.sendMessage(from, { text: `🔕 suppressWhenOwnerActive sudah ${config.suppressWhenOwnerActive ? 'ON' : 'OFF'}` });
+              await sock.sendMessage(from, { text: `🔕 *Suppress Mode Diperbarui*\n\nSuppressWhenOwnerActive: *${config.suppressWhenOwnerActive ? 'AKTIF ✅' : 'NONAKTIF ❌'}*\n\n${config.suppressWhenOwnerActive ? 'Bot tidak akan reply saat admin aktif.' : 'Bot akan tetap reply meski admin aktif.'}` });
               return;
             }
             if (sub === 'timeout') {
@@ -446,13 +449,13 @@ async function startBot() {
               if (!isNaN(sec) && sec >= 0) {
                 config.suppressTimeoutSeconds = sec;
                 saveConfig(config);
-                await sock.sendMessage(from, { text: `⏱️ suppressTimeoutSeconds diset ke ${sec} detik` });
+                await sock.sendMessage(from, { text: `⏱️ *Suppress Timeout Diperbarui*\n\nTimeout diset ke: *${sec} detik*\n\nBot akan suppress reply jika admin aktif dalam ${sec} detik terakhir.` });
               } else {
-                await sock.sendMessage(from, { text: 'Gunakan: !suppress timeout <seconds> (contoh: !suppress timeout 120)' });
+                await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!suppress timeout <detik>\n\nContoh:\n!suppress timeout 120` });
               }
               return;
             }
-            await sock.sendMessage(from, { text: 'Perintah suppress tidak dikenali. Gunakan on|off atau timeout.' });
+            await sock.sendMessage(from, { text: `⚠️ *Perintah Tidak Dikenali*\n\nGunakan:\n!suppress on|off\n!suppress timeout <detik>` });
             return;
           }
 
@@ -461,9 +464,9 @@ async function startBot() {
             if (val === 'on' || val === 'off') {
               config.autoReply = (val === 'on');
               saveConfig(config);
-              await sock.sendMessage(from, { text: `🔁 Auto-reply sekarang: ${config.autoReply ? 'ON' : 'OFF'}` });
+              await sock.sendMessage(from, { text: `🔁 *Auto-Reply Diperbarui*\n\nStatus: *${config.autoReply ? 'AKTIF ✅' : 'NONAKTIF ❌'}*\n\n${config.autoReply ? 'Bot akan otomatis membalas pesan user.' : 'Bot tidak akan otomatis membalas pesan user.'}` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !autoreply on|off' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!autoreply on|off\n\nContoh:\n!autoreply on` });
             }
             return;
           }
@@ -473,14 +476,14 @@ async function startBot() {
             if (!isNaN(sec) && sec >= 0) {
               config.replyCooldownSeconds = sec;
               saveConfig(config);
-              await sock.sendMessage(from, { text: `⏱️ cooldown reply diset ke ${sec} detik` });
+              await sock.sendMessage(from, { text: `⏱️ *Cooldown Diperbarui*\n\nCooldown reply diset ke: *${sec} detik*\n\nBot akan menunggu ${sec} detik sebelum membalas pesan berikutnya dari user yang sama.` });
             } else {
-              await sock.sendMessage(from, { text: 'Gunakan: !cooldown <seconds> (contoh: !cooldown 60)' });
+              await sock.sendMessage(from, { text: `⚠️ *Format Perintah Salah*\n\nGunakan format:\n!cooldown <detik>\n\nContoh:\n!cooldown 60` });
             }
             return;
           }
 
-          await sock.sendMessage(from, { text: 'Perintah admin tidak dikenali. Ketik !show untuk melihat konfigurasi saat ini.' });
+          await sock.sendMessage(from, { text: `❌ *Perintah Tidak Dikenali*\n\nKetik *!show* untuk melihat konfigurasi saat ini.\n\nDaftar perintah admin:\n• !status\n• !whitelist\n• !blacklist\n• !admin\n• !suppress\n• !autoreply\n• !cooldown\n• !show` });
           return;
         }
 
@@ -594,20 +597,21 @@ async function startBot() {
         }
 
         const timeGreet = getTimeGreeting();
-        let reply = `${timeGreet} 👋\nTerima kasih sudah menghubungi ${owner}. Saya adalah asisten virtual ${owner}.`;
+        let reply = `${timeGreet} 👋\n\nTerima kasih sudah menghubungi *${owner}*.\nSaya adalah asisten virtual yang siap membantu Anda.\n\nPesan Anda telah kami terima dan akan segera ditanggapi.\nMohon menunggu sebentar ya! 😊`;
+        
         const lower = text.toLowerCase();
         if (lower.includes('halo') || lower.includes('hi') || lower.includes('hello') || lower.includes('selamat')) {
-          reply = `${timeGreet} 👋! Terima kasih sudah menyapa. Pesan Anda sudah diterima oleh ${owner}.`;
-        } else if (lower.includes('terima kasih') || lower.includes('thanks')) {
-          reply = `Sama-sama 😊 Senang bisa membantu.`;
+          reply = `${timeGreet} 👋\n\nTerima kasih sudah menyapa!\nPesan Anda sudah diterima oleh *${owner}* dan akan segera dibalas.\n\nMohon ditunggu sebentar ya! 😊`;
+        } else if (lower.includes('terima kasih') || lower.includes('thanks') || lower.includes('makasih')) {
+          reply = `Sama-sama! 😊\n\nSenang bisa membantu Anda.\nJika ada pertanyaan lain, jangan ragu untuk menghubungi kami kembali.\n\nTerima kasih! 🙏`;
         }
 
         if (config.mode === 'online' || config.mode === 'busy') {
           // When owner is online but busy — use friendlier, multi-line template
-          reply = `Hai, ${timeGreet} 👋\nSaya adalah asisten virtual milik ${owner}.\nSaat ini ${owner} sedang sibuk, mohon ditunggu beberapa saat hingga beliau dapat membalas pesan Anda.\nTerima kasih atas perhatian dan pengertiannya 🙏`;
+          reply = `${timeGreet} 👋\n\nSaya adalah asisten virtual milik *${owner}*.\n\nSaat ini *${owner}* sedang sibuk menangani keperluan lain.\nMohon ditunggu beberapa saat, pesan Anda akan segera dibalas.\n\nTerima kasih atas perhatian dan pengertiannya. 🙏`;
         } else if (config.mode === 'offline') {
           // When owner is offline (friendly multiline template)
-          reply = `${timeGreet} 👋\nMohon maaf, *${owner}* saat ini sedang tidak aktif.\nSilakan tinggalkan pesan, dan *${owner}* akan membalasnya setelah kembali online.\nTerima kasih atas pengertian dan kesabarannya 🙏`;
+          reply = `${timeGreet} 👋\n\nMohon maaf, saat ini *${owner}* sedang tidak aktif.\n\nSilakan tinggalkan pesan Anda, dan *${owner}* akan membalasnya setelah kembali online.\n\nTerima kasih atas pengertian dan kesabarannya. 🙏`;
         }
 
         // Send reply
