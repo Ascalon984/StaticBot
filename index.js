@@ -94,6 +94,28 @@ async function startBot() {
       }
     }
 
+    // assist state: per-sender preference for assistance buttons
+    const ASSIST_PATH = path.join(__dirname, 'assist_state.json');
+    let assistState = { bySender: {} };
+    try {
+      if (fs.existsSync(ASSIST_PATH)) {
+        const raw = fs.readFileSync(ASSIST_PATH, 'utf8');
+        const obj = JSON.parse(raw || '{}');
+        if (obj && typeof obj === 'object') assistState = obj;
+      }
+    } catch (e) {
+      console.error('Failed to load assist_state.json', e);
+      assistState = { bySender: {} };
+    }
+
+    function saveAssistState() {
+      try {
+        fs.writeFileSync(ASSIST_PATH, JSON.stringify(assistState, null, 2));
+      } catch (e) {
+        console.error('Failed to save assist_state.json', e);
+      }
+    }
+
     const sock = makeWASocket({
       logger: pino({ level: 'silent' }),
       printQRInTerminal: true,
@@ -140,7 +162,7 @@ async function startBot() {
       }
     });
 
-      // ownerJid and presence tracking for suppression
+      // ownerJid and presence tracking for suppression / assist
       let ownerJid = undefined;
       try {
         ownerJid = state.creds?.me?.id || (state.creds?.me && `${state.creds.me?.user}@s.whatsapp.net`);
@@ -150,6 +172,9 @@ async function startBot() {
       }
 
       let lastOwnerActive = 0; // timestamp ms of last owner activity
+      let ownerOnline = false; // presence flag
+      // how long of idle before we consider owner "not actively viewing" (seconds)
+      const OWNER_IDLE_SECONDS = (config.ownerIdleSeconds || 30);
 
     // simple per-number cooldown map (avoid spam replies)
     const lastReplyAt = new Map();
@@ -159,20 +184,35 @@ async function startBot() {
         try {
           const now = Date.now();
           if (!update) return;
-          if (update.id && ownerJid && update.id === ownerJid) {
-            lastOwnerActive = now;
-            if (config.suppressWhenOwnerActive) console.log('Presence detected for owner, updated lastOwnerActive');
-            return;
-          }
-          if (typeof update === 'object') {
-            const keys = Object.keys(update);
-            for (const k of keys) {
-              if (k === ownerJid || k === (ownerJid?.split('@')[0])) {
-                lastOwnerActive = now;
-                if (config.suppressWhenOwnerActive) console.log('Presence mapping contains owner, updated lastOwnerActive');
-                return;
+          // detect owner presence/online and activity
+          const isOwnerUpdate = (update.id && ownerJid && update.id === ownerJid) || (typeof update === 'object' && Object.keys(update).some(k => k === ownerJid || k === (ownerJid?.split('@')[0])));
+          // helper to inspect presence objects for "available" or composing states
+          const checkPresenceAvailable = (u) => {
+            try {
+              if (!u) return false;
+              if (u.presence && u.presence === 'available') return true;
+              if (u.lastKnownPresence && u.lastKnownPresence === 'available') return true;
+              if (u.presences) {
+                for (const v of Object.values(u.presences)) {
+                  if (!v) continue;
+                  if (v.presence === 'available' || v.lastKnownPresence === 'available') return true;
+                  if (v.chatState === 'composing') return true;
+                }
               }
+              return false;
+            } catch (e) { return false; }
+          };
+
+          try {
+            const online = checkPresenceAvailable(update) || checkPresenceAvailable(update.presences || update[ownerJid]);
+            ownerOnline = !!online;
+            if (isOwnerUpdate) {
+              // update lastOwnerActive timestamp when owner presence update occurs
+              lastOwnerActive = now;
+              if (config.suppressWhenOwnerActive) console.log('Presence detected for owner, updated lastOwnerActive');
             }
+          } catch (e) {
+            // ignore
           }
         } catch (e) {
           // ignore
@@ -205,7 +245,7 @@ async function startBot() {
           return '';
         };
 
-        const text = (getText() || '').trim();
+  const text = (getText() || '').trim();
         const remoteNumber = jidToNumber(from);
         console.log('Incoming message from', remoteNumber, '-', text);
 
@@ -214,6 +254,35 @@ async function startBot() {
         if (repliedSet.has(messageKey)) {
           console.log('Already replied to message', messageKey, '- skipping');
           return;
+        }
+
+        // Handle button/list responses first (user interaction with "Apakah Terbantu?" buttons)
+        try {
+          const btn = msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || null;
+          const list = msg.message?.listResponse || null;
+          const selected = btn?.selectedButtonId || btn?.selectedId || list?.singleSelectReply?.selectedRowId || null;
+          const normalized = (selected || text || '').toString().trim().toLowerCase();
+          if (normalized) {
+            if (normalized === 'assist_yes' || normalized === 'iya' || normalized === 'yes') {
+              assistState.bySender[remoteNumber] = assistState.bySender[remoteNumber] || {};
+              assistState.bySender[remoteNumber].assistEnabled = true;
+              assistState.bySender[remoteNumber].lastDeniedAt = 0;
+              saveAssistState();
+              await sock.sendMessage(from, { text: 'Terima kasih — saya akan terus membalas saat admin belum melihat chat.' });
+              return;
+            }
+            if (normalized === 'assist_no' || normalized === 'tidak' || normalized === 'no') {
+              assistState.bySender[remoteNumber] = assistState.bySender[remoteNumber] || {};
+              assistState.bySender[remoteNumber].assistEnabled = false;
+              assistState.bySender[remoteNumber].lastDeniedAt = Date.now();
+              saveAssistState();
+              const cooldownMin = Math.round(((config.assistCooldownSeconds || 3600) / 60));
+              await sock.sendMessage(from, { text: `Baik. Saya tidak akan membalas selama ${cooldownMin} menit.` });
+              return;
+            }
+          }
+        } catch (e) {
+          // ignore button handling errors
         }
 
         // Admin commands: only from configured adminNumbers
@@ -372,11 +441,36 @@ async function startBot() {
             // ignore suppression errors
           }
         }
-
         // If autoReply disabled, do not send automatic replies to normal users
         if (!config.autoReply) {
           console.log('Auto-reply disabled, ignoring message from', remoteNumber);
           return;
+        }
+
+        // Assist logic: if owner is online but idle (not actively viewing), offer quick-help buttons
+        try {
+          const nowMs = Date.now();
+          const adminOnline = !!ownerOnline;
+          const adminIdle = ((nowMs - (lastOwnerActive || 0)) / 1000) > OWNER_IDLE_SECONDS;
+          const assistCooldown = (config.assistCooldownSeconds || 3600);
+          const st = assistState.bySender[remoteNumber] || { assistEnabled: true, lastDeniedAt: 0 };
+
+          if (adminOnline && adminIdle) {
+            // if sender explicitly disabled assist and still in cooldown, skip
+            if (st.assistEnabled === false && st.lastDeniedAt && ((nowMs - st.lastDeniedAt) / 1000) < assistCooldown) {
+              console.log('Assist disabled for', remoteNumber, 'and still in cooldown — skipping reply');
+              return;
+            }
+
+            // If assist enabled (user previously said Iya), proceed to normal reply below
+            if (st.assistEnabled !== false) {
+              // we'll continue to send reply (and also include buttons the first time)
+            } else {
+              // assist disabled but cooldown expired — show buttons again (fallthrough)
+            }
+          }
+        } catch (e) {
+          // ignore assist errors
         }
 
         // rate limit (per-number cooldown)
@@ -423,16 +517,56 @@ async function startBot() {
           reply = `${timeGreet} 👋\nMohon maaf, *${owner}* saat ini sedang tidak aktif.\nSilakan tinggalkan pesan, dan *${owner}* akan membalasnya setelah kembali online.\nTerima kasih atas pengertian dan kesabarannya 🙏`;
         }
 
-        // Send reply
-        await sock.sendMessage(from, { text: reply });
-        // mark this message as replied (persist so we don't reply again to same message)
+        // Send reply (consider assist state / buttons when owner is online but idle)
         try {
-          repliedSet.add(messageKey);
-          saveReplied();
+          const nowMs = Date.now();
+          const adminOnline = !!ownerOnline;
+          const adminIdle = ((nowMs - (lastOwnerActive || 0)) / 1000) > OWNER_IDLE_SECONDS;
+          const assistCooldown = (config.assistCooldownSeconds || 3600);
+          const st = assistState.bySender[remoteNumber] || { assistEnabled: true, lastDeniedAt: 0 };
+
+          if (adminOnline && adminIdle) {
+            // if sender disabled assist and still in cooldown, skip replying
+            if (st.assistEnabled === false && st.lastDeniedAt && ((nowMs - st.lastDeniedAt) / 1000) < assistCooldown) {
+              console.log('Assist disabled for', remoteNumber, 'and still in cooldown — skipping reply');
+              return;
+            }
+
+            if (st.assistEnabled === true) {
+              // user opted in: normal text reply
+              await sock.sendMessage(from, { text: reply });
+            } else {
+              // ask user if they are helped (buttons) and do not repeatedly spam - include footer and two buttons
+              const buttons = [
+                { buttonId: 'assist_yes', buttonText: { displayText: 'Iya' }, type: 1 },
+                { buttonId: 'assist_no', buttonText: { displayText: 'Tidak' }, type: 1 }
+              ];
+              const buttonMessage = {
+                text: reply,
+                footerText: 'Apakah Terbantu?',
+                buttons,
+                headerType: 1
+              };
+              await sock.sendMessage(from, buttonMessage);
+            }
+          } else {
+            // normal behavior when owner not online+idle
+            await sock.sendMessage(from, { text: reply });
+          }
+
+          // mark this message as replied (persist so we don't reply again to same message)
+          try {
+            repliedSet.add(messageKey);
+            saveReplied();
+          } catch (e) {
+            // ignore save errors
+          }
+          // persist assist state if updated
+          try { assistState.bySender[remoteNumber] = st; saveAssistState(); } catch(e){}
+          console.log('Replied to', remoteNumber, 'mode:', config.mode);
         } catch (e) {
-          // ignore save errors
+          console.error('Failed to send reply:', e);
         }
-        console.log('Replied to', remoteNumber, 'mode:', config.mode);
 
       } catch (err) {
         console.error('Error handling message:', err);
