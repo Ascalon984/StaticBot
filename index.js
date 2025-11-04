@@ -3,6 +3,21 @@ const path = require('path');
 const { default: makeWASocket, useSingleFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const http = require('http');
+
+// Logging utility with configurable levels
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // debug|info|error
+const LOG_LEVELS = { debug: 0, info: 1, error: 2 };
+
+function log(level, ...args) {
+  if (LOG_LEVELS[level] >= LOG_LEVELS[LOG_LEVEL]) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${level.toUpperCase()}]`, ...args);
+  }
+}
+
+// Singleton pattern: prevent multiple bot instances
+let botRunning = false;
 
 // Use multi-file auth state (v7+ of baileys)
 // We'll initialize this inside startBot() because useMultiFileAuthState is async
@@ -30,22 +45,22 @@ function loadConfig() {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
     return JSON.parse(raw);
     } catch (e) {
-    console.error('Failed to load config, using defaults', e);
-    return { mode: 'online', ownerName: 'Nama', whitelist: [], blacklist: [], adminNumbers: [], suppressWhenOwnerActive: false, suppressTimeoutSeconds: 120, autoReply: true, replyCooldownSeconds: 3600 };
-  }
+      log('error', 'Failed to load config, using defaults', e);
+      return { mode: 'online', ownerName: 'Nama', whitelist: [], blacklist: [], adminNumbers: [], suppressWhenOwnerActive: false, suppressTimeoutSeconds: 120, autoReply: true, replyCooldownSeconds: 3600 };
+    }
 }
 
 function saveConfig(cfg) {
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
   } catch (e) {
-    console.error('Failed to save config', e);
+    log('error', 'Failed to save config', e);
   }
 }
 
 let config = loadConfig();
-// set default cooldown to 60s (1 minute) unless user explicitly configured otherwise
-if (typeof config.replyCooldownSeconds !== 'number' || config.replyCooldownSeconds !== 60) {
+// set default cooldown to 60s (1 minute) only if not configured
+if (typeof config.replyCooldownSeconds !== 'number') {
   config.replyCooldownSeconds = 60;
   saveConfig(config);
 }
@@ -56,6 +71,12 @@ function jidToNumber(jid) {
 }
 
 async function startBot() {
+  if (botRunning) {
+    log('info', 'Bot already running, skipping duplicate start');
+    return;
+  }
+  botRunning = true;
+  
   try {
     // Fetch latest WA Web protocol version
     const { version } = await fetchLatestBaileysVersion();
@@ -69,7 +90,7 @@ async function startBot() {
     } catch (e) {
       // ignore mkdir errors - useMultiFileAuthState will report if needed
     }
-    console.log('Using auth directory:', authDir);
+    log('info', 'Using auth directory:', authDir);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     // load persisted "replied" set to ensure we reply at-most-once per incoming message
@@ -82,15 +103,17 @@ async function startBot() {
         if (Array.isArray(arr)) repliedSet = new Set(arr);
       }
     } catch (e) {
-      console.error('Failed to load replied.json', e);
+      log('error', 'Failed to load replied.json', e);
       repliedSet = new Set();
     }
 
     function saveReplied() {
       try {
-        fs.writeFileSync(REPLIED_PATH, JSON.stringify(Array.from(repliedSet), null, 2));
+        const tmpPath = REPLIED_PATH + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(Array.from(repliedSet), null, 2));
+        fs.renameSync(tmpPath, REPLIED_PATH); // atomic on POSIX
       } catch (e) {
-        console.error('Failed to save replied.json', e);
+        log('error', 'Failed to save replied.json', e);
       }
     }
 
@@ -104,15 +127,17 @@ async function startBot() {
         if (obj && typeof obj === 'object') assistState = obj;
       }
     } catch (e) {
-      console.error('Failed to load assist_state.json', e);
+      log('error', 'Failed to load assist_state.json', e);
       assistState = { bySender: {} };
     }
 
     function saveAssistState() {
       try {
-        fs.writeFileSync(ASSIST_PATH, JSON.stringify(assistState, null, 2));
+        const tmpPath = ASSIST_PATH + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(assistState, null, 2));
+        fs.renameSync(tmpPath, ASSIST_PATH); // atomic on POSIX
       } catch (e) {
-        console.error('Failed to save assist_state.json', e);
+        log('error', 'Failed to save assist_state.json', e);
       }
     }
 
@@ -132,11 +157,11 @@ async function startBot() {
       if (qr) {
         // show QR in terminal for initial login
         qrcode.generate(qr, { small: true });
-        console.log('QR code generated - scan with WhatsApp');
+        log('info', 'QR code generated - scan with WhatsApp');
       }
 
       if (connection === 'open') {
-        console.log('✅ Connected to WhatsApp');
+        log('info', '✅ Connected to WhatsApp');
         // update ownerName from session if available
         try {
           const me = state.creds?.me;
@@ -151,13 +176,14 @@ async function startBot() {
 
       if (connection === 'close') {
         const reason = lastDisconnect?.error?.output?.statusCode;
-        console.log('Connection closed, status code:', reason);
-        // if logged out, stop; otherwise try reconnecting
+        log('info', 'Connection closed, status code:', reason);
+        // if logged out, stop; otherwise reconnect after delay
         if (reason !== DisconnectReason.loggedOut) {
-          console.log('Reconnecting...');
-          startBot();
+          log('info', 'Reconnecting in 5 seconds...');
+          setTimeout(() => startBot(), 5000);
         } else {
-          console.log('Logged out. Delete auth_info.json and re-run to re-authenticate.');
+          log('info', 'Logged out. Delete auth_info and re-run to re-authenticate.');
+          process.exit(0);
         }
       }
     });
@@ -166,7 +192,7 @@ async function startBot() {
       let ownerJid = undefined;
       try {
         ownerJid = state.creds?.me?.id || (state.creds?.me && `${state.creds.me?.user}@s.whatsapp.net`);
-        if (ownerJid) console.log('Owner JID:', ownerJid);
+        if (ownerJid) log('info', 'Owner JID:', ownerJid);
       } catch (e) {
         // ignore
       }
@@ -209,7 +235,8 @@ async function startBot() {
             if (isOwnerUpdate) {
               // update lastOwnerActive timestamp when owner presence update occurs
               lastOwnerActive = now;
-              if (config.suppressWhenOwnerActive) console.log('Presence detected for owner, updated lastOwnerActive');
+              lastOwnerActiveGlobal = now; // for health endpoint
+              if (config.suppressWhenOwnerActive) log('debug', 'Presence detected for owner, updated lastOwnerActive');
             }
           } catch (e) {
             // ignore
@@ -226,7 +253,8 @@ async function startBot() {
           // if message status changed to 'read' or has readTimestamp
           if (update.update?.status === 4 || update.update?.status === 'read' || update.key?.fromMe) {
             lastOwnerActive = Date.now();
-            console.log('Admin read message - updated lastOwnerActive');
+            lastOwnerActiveGlobal = lastOwnerActive;
+            log('debug', 'Admin read message - updated lastOwnerActive');
           }
         }
       } catch (e) {
@@ -244,7 +272,8 @@ async function startBot() {
         for (const message of messages) {
           if (message.key && message.key.fromMe) {
             lastOwnerActive = Date.now();
-            console.log('Admin sent message - updated lastOwnerActive');
+            lastOwnerActiveGlobal = lastOwnerActive;
+            log('debug', 'Admin sent message - updated lastOwnerActive');
           }
         }
         
@@ -268,11 +297,11 @@ async function startBot() {
         const ownerNumber = config.adminNumbers && config.adminNumbers[0] ? config.adminNumbers[0] : null;
         
         if (ownerJid && from === ownerJid) {
-          console.log('Skipping self-chat message from owner JID:', from);
+          log('debug', 'Skipping self-chat message from owner JID:', from);
           return;
         }
         if (ownerNumber && remoteNumber === ownerNumber) {
-          console.log('Skipping self-chat message from owner number:', remoteNumber);
+          log('debug', 'Skipping self-chat message from owner number:', remoteNumber);
           return;
         }
 
@@ -287,12 +316,12 @@ async function startBot() {
         };
 
         const text = (getText() || '').trim();
-        console.log('Incoming message from', remoteNumber, '-', text);
+        log('info', 'Incoming message from', remoteNumber, '-', text);
 
         // Create a unique key per incoming message to ensure we reply at-most-once per message
         const messageKey = `${remoteNumber}_${msg.key.id}`;
         if (repliedSet.has(messageKey)) {
-          console.log('Already replied to message', messageKey, '- skipping');
+          log('debug', 'Already replied to message', messageKey, '- skipping');
           return;
         }
 
@@ -457,13 +486,13 @@ async function startBot() {
 
         // Blacklist handling
         if (config.blacklist.includes(remoteNumber)) {
-          console.log('Sender in blacklist, ignoring:', remoteNumber);
+          log('debug', 'Sender in blacklist, ignoring:', remoteNumber);
           return;
         }
 
         // Whitelist handling: if whitelist non-empty, only respond to those in whitelist
         if (config.whitelist.length > 0 && !config.whitelist.includes(remoteNumber)) {
-          console.log('Sender not in whitelist, ignoring:', remoteNumber);
+          log('debug', 'Sender not in whitelist, ignoring:', remoteNumber);
           return;
         }
 
@@ -474,7 +503,7 @@ async function startBot() {
             const since = now - (lastOwnerActive || 0);
             const timeoutMs = (config.suppressTimeoutSeconds || 120) * 1000;
             if (lastOwnerActive && since <= timeoutMs) {
-              console.log(`Owner active recently (${Math.round(since/1000)}s ago) — suppressing auto-reply to ${remoteNumber}`);
+              log('debug', `Owner active recently (${Math.round(since/1000)}s ago) — suppressing auto-reply to ${remoteNumber}`);
               return;
             }
           } catch (e) {
@@ -483,7 +512,7 @@ async function startBot() {
         }
         // If autoReply disabled, do not send automatic replies to normal users
         if (!config.autoReply) {
-          console.log('Auto-reply disabled, ignoring message from', remoteNumber);
+          log('debug', 'Auto-reply disabled, ignoring message from', remoteNumber);
           return;
         }
 
@@ -498,18 +527,18 @@ async function startBot() {
           const assistCooldown = (config.assistCooldownSeconds || 3600);
           const st = assistState.bySender[remoteNumber] || { assistEnabled: true, lastDeniedAt: 0, lastRepliedMsgId: null };
 
-          console.log(`Assist check: adminOnline=${adminOnline}, adminIdle=${adminIdle}, idleSeconds=${Math.round((nowMs - lastOwnerActive)/1000)}, threshold=${OWNER_IDLE_SECONDS}`);
+          log('debug', `Assist check: adminOnline=${adminOnline}, adminIdle=${adminIdle}, idleSeconds=${Math.round((nowMs - lastOwnerActive)/1000)}, threshold=${OWNER_IDLE_SECONDS}`);
 
           if (adminOnline && adminIdle) {
             // Check if we already replied to this exact message
             if (st.lastRepliedMsgId === msg.key.id) {
-              console.log('Already replied to this message ID for', remoteNumber, '- skipping');
+              log('debug', 'Already replied to this message ID for', remoteNumber, '- skipping');
               return;
             }
 
             // if sender explicitly disabled assist and still in cooldown, skip
             if (st.assistEnabled === false && st.lastDeniedAt && ((nowMs - st.lastDeniedAt) / 1000) < assistCooldown) {
-              console.log('Assist disabled for', remoteNumber, 'and still in cooldown — skipping reply');
+              log('debug', 'Assist disabled for', remoteNumber, 'and still in cooldown — skipping reply');
               return;
             }
 
@@ -531,7 +560,7 @@ async function startBot() {
           // Store state
           assistState.bySender[remoteNumber] = st;
         } catch (e) {
-          console.error('Assist logic error:', e);
+          log('error', 'Assist logic error:', e);
           // ignore assist errors, fallback to normal reply
         }
 
@@ -545,7 +574,7 @@ async function startBot() {
           const last = lastReplyAt.get(remoteNumber) || 0;
           const cooldownMs = (config.replyCooldownSeconds || 60) * 1000;
           if (now - last < cooldownMs) {
-            console.log(`Skipping reply due cooldown for ${remoteNumber} (wait ${Math.ceil((cooldownMs - (now-last))/1000)}s)`);
+            log('debug', `Skipping reply due cooldown for ${remoteNumber} (wait ${Math.ceil((cooldownMs - (now-last))/1000)}s)`);
             return;
           }
         } catch (e) {
@@ -614,22 +643,50 @@ async function startBot() {
             st.lastRepliedMsgId = msg.key.id;
             assistState.bySender[remoteNumber] = st;
             saveAssistState();
+            repliedCountGlobal = repliedSet.size; // update health metric
           } catch (e) {
             // ignore save errors
           }
-          console.log('Replied to', remoteNumber, 'mode:', config.mode, 'buttons:', useButtons);
+          log('info', 'Replied to', remoteNumber, 'mode:', config.mode, 'buttons:', useButtons);
         } catch (e) {
-          console.error('Failed to send reply:', e);
+          log('error', 'Failed to send reply:', e);
         }
 
       } catch (err) {
-        console.error('Error handling message:', err);
+        log('error', 'Error handling message:', err);
       }
     });
 
   } catch (err) {
-    console.error('Failed to start bot:', err);
+    log('error', 'Failed to start bot:', err);
+    botRunning = false;
   }
 }
+
+// Health check endpoint for monitoring
+let lastOwnerActiveGlobal = 0;
+let repliedCountGlobal = 0;
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      uptime: process.uptime(),
+      botRunning,
+      lastOwnerActive: lastOwnerActiveGlobal ? new Date(lastOwnerActiveGlobal).toISOString() : null,
+      repliedCount: repliedCountGlobal,
+      timestamp: new Date().toISOString()
+    }));
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+});
+
+const HEALTH_PORT = process.env.HEALTH_PORT || 3000;
+healthServer.listen(HEALTH_PORT, () => {
+  log('info', `Health check endpoint running on http://localhost:${HEALTH_PORT}/health`);
+});
 
 startBot();
