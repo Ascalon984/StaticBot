@@ -5,8 +5,7 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const http = require('http');
 
-// Logging utility with configurable levels
-const LOG_LEVEL = process.env.LOG_LEVEL || 'info'; // debug|info|error
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const LOG_LEVELS = { debug: 0, info: 1, error: 2 };
 
 function log(level, ...args) {
@@ -16,12 +15,7 @@ function log(level, ...args) {
   }
 }
 
-// Singleton pattern: prevent multiple bot instances
 let botRunning = false;
-
-// Use multi-file auth state (v7+ of baileys)
-// We'll initialize this inside startBot() because useMultiFileAuthState is async
-// and returns { state, saveCreds }.
 
 const CONFIG_PATH = path.join(__dirname, 'bot_config.json');
 
@@ -29,7 +23,7 @@ function loadConfig() {
   try {
     if (!fs.existsSync(CONFIG_PATH)) {
       const defaultConfig = {
-        mode: 'online', // 'online' | 'offline' | 'busy' (treat 'busy' same as 'online')
+        mode: 'online',
         ownerName: 'Nama',
         whitelist: [],
         blacklist: [],
@@ -59,7 +53,6 @@ function saveConfig(cfg) {
 }
 
 let config = loadConfig();
-// set default cooldown to 60s (1 minute) only if not configured
 if (typeof config.replyCooldownSeconds !== 'number') {
   config.replyCooldownSeconds = 60;
   saveConfig(config);
@@ -78,22 +71,16 @@ async function startBot() {
   botRunning = true;
   
   try {
-    // Fetch latest WA Web protocol version
     const { version } = await fetchLatestBaileysVersion();
 
-    // initialize multi-file auth state. Allow overriding path with AUTH_DIR env var
     const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
     const authDir = process.env.AUTH_DIR ? path.resolve(process.env.AUTH_DIR) : path.join(__dirname, 'auth_info');
     try {
-      // ensure directory exists (useful when mounting an empty volume)
       fs.mkdirSync(authDir, { recursive: true });
     } catch (e) {
-      // ignore mkdir errors - useMultiFileAuthState will report if needed
     }
     log('info', 'Using auth directory:', authDir);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-
-    // load persisted "replied" set to ensure we reply at-most-once per incoming message
     const REPLIED_PATH = path.join(__dirname, 'replied.json');
     let repliedSet = new Set();
     try {
@@ -116,8 +103,6 @@ async function startBot() {
         log('error', 'Failed to save replied.json', e);
       }
     }
-
-    // assist state: per-sender preference for assistance buttons
     const ASSIST_PATH = path.join(__dirname, 'assist_state.json');
     let assistState = { bySender: {} };
     try {
@@ -135,7 +120,7 @@ async function startBot() {
       try {
         const tmpPath = ASSIST_PATH + '.tmp';
         fs.writeFileSync(tmpPath, JSON.stringify(assistState, null, 2));
-        fs.renameSync(tmpPath, ASSIST_PATH); // atomic on POSIX
+        fs.renameSync(tmpPath, ASSIST_PATH);
       } catch (e) {
         log('error', 'Failed to save assist_state.json', e);
       }
@@ -146,22 +131,19 @@ async function startBot() {
       auth: state,
       version
     });
-
-    // save auth creds when updated
+    
     sock.ev.on('creds.update', saveCreds);
 
-    // connection updates (qr, open, close)
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr) {
-        // show QR in terminal for initial login
         qrcode.generate(qr, { small: true });
         log('info', 'QR code generated - scan with WhatsApp');
       }
 
       if (connection === 'open') {
         log('info', '✅ Connected to WhatsApp');
-        // update ownerName from session if available
+    
         try {
           const me = state.creds?.me;
           if (me && me.name && (!config.ownerName || config.ownerName === 'Nama')) {
@@ -169,16 +151,13 @@ async function startBot() {
             saveConfig(config);
           }
         } catch (e) {
-          // ignore
         }
       }
 
       if (connection === 'close') {
         const reason = lastDisconnect?.error?.output?.statusCode;
         log('info', 'Connection closed, status code:', reason);
-        // Reset botRunning flag so reconnect can proceed
         botRunning = false;
-        // if logged out, stop; otherwise reconnect after delay
         if (reason !== DisconnectReason.loggedOut) {
           log('info', 'Reconnecting in 5 seconds...');
           setTimeout(() => startBot(), 5000);
@@ -189,13 +168,11 @@ async function startBot() {
       }
     });
 
-      // ownerJid and presence tracking for suppression / assist
       let ownerJid = undefined;
       try {
         ownerJid = state.creds?.me?.id || (state.creds?.me && `${state.creds.me?.user}@s.whatsapp.net`);
         if (ownerJid) log('info', 'Owner JID:', ownerJid);
       } catch (e) {
-        // ignore
       }
 
       let lastOwnerActive = 0; // timestamp ms of last owner activity
