@@ -1,4 +1,3 @@
-# ignore auth/session files (sensitive!)
 auth_info/
 auth_info/*
 auth_info.json
