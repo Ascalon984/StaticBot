@@ -1,13 +1,13 @@
 {
   "mode": "online",
-  "ownerName": "(masukkan nama admin",
+  "ownerName": "(Aditya",
   "whitelist": [],
   "blacklist": [],
   "adminNumbers": [
-    "(masukkan nomor mu ges awalan 62"
+    "(6283848600103"
   ],
   "autoReply": true,
   "suppressWhenOwnerActive": false,
   "suppressTimeoutSeconds": 120
-  ,"replyCooldownSeconds": 60
+  ,"replyCooldownSeconds": 30
 }
