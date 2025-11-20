@@ -9,5 +9,5 @@
   "autoReply": true,
   "suppressWhenOwnerActive": false,
   "suppressTimeoutSeconds": 120
-  ,"replyCooldownSeconds": 30
+  ,"replyCooldownSeconds": 60
 }
